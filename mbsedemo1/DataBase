@@ -1,0 +1,106 @@
+CREATE DATABASE file_management;
+CREATE TABLE IF NOT EXISTS files (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    size BIGINT NOT NULL,
+    upload_time TIMESTAMP NOT NULL,
+    content TEXT
+);
+
+ALTER TABLE files ADD COLUMN search_vector TSVECTOR;
+UPDATE files SET search_vector = to_tsvector('english', content);
+CREATE INDEX search_vector_idx ON files USING GIN(search_vector);
+
+-- 创建触发器函数
+CREATE OR REPLACE FUNCTION files_search_vector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector := to_tsvector('english', NEW.content);
+  RETURN NEW;
+END
+$$ LANGUAGE plpgsql;
+
+-- 创建触发器
+CREATE TRIGGER trg_files_search_vector_update
+BEFORE INSERT OR UPDATE ON files
+FOR EACH ROW EXECUTE FUNCTION files_search_vector_update();
+
+CREATE TABLE IF NOT EXISTS projects (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS folders (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+ALTER TABLE files ADD COLUMN folder_id INTEGER;
+ALTER TABLE files ADD FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE;
+CREATE INDEX idx_folders_project_id ON folders(project_id);
+CREATE INDEX idx_files_folder_id ON files(folder_id);
+
+CREATE TABLE fileorfolders (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255),
+    size BIGINT,
+    upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    content TEXT,
+    is_file BOOLEAN,
+    project_id INTEGER,
+    parent_id INTEGER,
+    FOREIGN KEY (parent_id) REFERENCES fileorfolders(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+-- 可选：为外键列创建索引，提高查询性能
+CREATE INDEX idx_fileorfolders_parent_id ON fileorfolders(parent_id);
+CREATE INDEX idx_fileorfolders_project_id ON fileorfolders(project_id);
+
+-- 为表添加搜索向量列
+ALTER TABLE fileorfolders ADD COLUMN search_vector TSVECTOR;
+
+-- 使用表中的content字段更新搜索向量
+UPDATE fileorfolders SET search_vector = to_tsvector('english', content);
+
+-- 为搜索向量创建GIN索引以优化搜索性能
+CREATE INDEX search_vector_idx ON fileorfolders USING GIN(search_vector);
+
+-- 创建触发器函数来自动更新搜索向量
+CREATE OR REPLACE FUNCTION fileorfolders_search_vector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector := to_tsvector('english', NEW.content);
+  RETURN NEW;
+END
+$$ LANGUAGE plpgsql;
+
+-- 为fileorfolders表创建触发器，在插入或更新记录前执行函数更新搜索向量
+CREATE TRIGGER trg_fileorfolders_search_vector_update
+BEFORE INSERT OR UPDATE ON fileorfolders
+FOR EACH ROW EXECUTE FUNCTION fileorfolders_search_vector_update();
+
+-- 创建触发器函数来在更新时设置upload_time为当前时间戳
+CREATE OR REPLACE FUNCTION update_upload_time() RETURNS trigger AS $$
+BEGIN
+  NEW.upload_time := CURRENT_TIMESTAMP;
+  RETURN NEW;
+END
+$$ LANGUAGE plpgsql;
+
+-- 创建触发器，每次更新记录时执行
+CREATE TRIGGER update_upload_time_trigger
+BEFORE UPDATE ON fileorfolders
+FOR EACH ROW EXECUTE FUNCTION update_upload_time();
+
+-- 创建一个新的序列
+CREATE SEQUENCE fileorfolders_id_seq;
+
+-- 将序列设置为id列的默认值
+ALTER TABLE fileorfolders ALTER COLUMN id SET DEFAULT nextval('fileorfolders_id_seq');
+
+-- 假设当前最大id是1000，从1001开始生成新的id
+CREATE SEQUENCE fileorfolders_id_seq START 101;
+
+
+
